@@ -7,6 +7,8 @@ ADD_LIBRARY(generate SHARED
 	Dictionary.cc
 	LinkStyle.cc
 	Odometer.cc
+	PlanarConstraints.cc
+	PlanarCallback.cc
 	RandomCallback.cc
 	SimpleCallback.cc
 )
@@ -28,6 +30,8 @@ INSTALL(FILES
 	GenerateCallback.h
 	LinkStyle.h
 	Odometer.h
+	PlanarConstraints.h
+	PlanarCallback.h
 	RandomCallback.h
 	RandomParameters.h
 	SimpleCallback.h

@@ -1,0 +1,220 @@
+/*
+ * tests/generate/PlanarConstraintsUTest.cxxtest
+ *
+ * Copyright (C) 2025 OpenCog Collection Contributors
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License v3 as
+ * published by the Free Software Foundation and including the exceptions
+ * at http://opencog.org/wiki/Licenses
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program; if not, write to:
+ * Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+#include <opencog/generate/PlanarConstraints.h>
+#include <opencog/atomspace/AtomSpace.h>
+#include <opencog/atoms/base/Node.h>
+
+using namespace opencog;
+
+class PlanarConstraintsUTest : public CxxTest::TestSuite
+{
+private:
+    AtomSpacePtr as;
+    PlanarConstraints* constraints;
+
+public:
+    PlanarConstraintsUTest()
+    {
+        logger().set_level(Logger::DEBUG);
+    }
+
+    void setUp()
+    {
+        as = createAtomSpace();
+        constraints = new PlanarConstraints(as.get());
+    }
+
+    void tearDown()
+    {
+        delete constraints;
+    }
+
+    void test_basic_sequence()
+    {
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        Handle c = as->add_node(CONCEPT_NODE, "c");
+        
+        std::vector<Handle> sequence = {a, b, c};
+        constraints->set_sequence(sequence);
+        
+        TS_ASSERT_EQUALS(constraints->get_position(a), 0);
+        TS_ASSERT_EQUALS(constraints->get_position(b), 1);
+        TS_ASSERT_EQUALS(constraints->get_position(c), 2);
+        TS_ASSERT_EQUALS(constraints->get_position(Handle::UNDEFINED), -1);
+    }
+
+    void test_planar_links()
+    {
+        // Create sequence: a b c d
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        Handle c = as->add_node(CONCEPT_NODE, "c");
+        Handle d = as->add_node(CONCEPT_NODE, "d");
+        
+        std::vector<Handle> sequence = {a, b, c, d};
+        constraints->set_sequence(sequence);
+        
+        // Test planar links
+        TS_ASSERT(constraints->is_planar_link(a, b)); // Adjacent: a-b
+        TS_ASSERT(constraints->is_planar_link(a, c)); // Non-adjacent: a-c
+        TS_ASSERT(constraints->is_planar_link(b, d)); // Non-adjacent: b-d
+        
+        // Add first link: a-c
+        TS_ASSERT(constraints->add_link(a, c));
+        
+        // Test that b-d would cross a-c and should be rejected
+        TS_ASSERT(!constraints->is_planar_link(b, d));
+        
+        // But a-b should still be fine (doesn't cross a-c)
+        TS_ASSERT(constraints->is_planar_link(a, b));
+        TS_ASSERT(constraints->add_link(a, b));
+        
+        // c-d should also be fine
+        TS_ASSERT(constraints->is_planar_link(c, d));
+        TS_ASSERT(constraints->add_link(c, d));
+        
+        // Check final state
+        TS_ASSERT(constraints->is_planar());
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 3);
+        TS_ASSERT_EQUALS(constraints->get_crossing_count(), 0);
+    }
+
+    void test_crossing_detection()
+    {
+        // Create sequence: a b c d
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        Handle c = as->add_node(CONCEPT_NODE, "c");
+        Handle d = as->add_node(CONCEPT_NODE, "d");
+        
+        std::vector<Handle> sequence = {a, b, c, d};
+        constraints->set_sequence(sequence);
+        
+        // Add crossing links: a-c and b-d
+        TS_ASSERT(constraints->add_link(a, c));
+        
+        // Force addition of crossing link (bypassing planarity check)
+        constraints->remove_link(a, c);
+        constraints->add_link(a, c);
+        constraints->remove_link(b, d);
+        constraints->add_link(b, d);
+        
+        // These should now cross
+        TS_ASSERT(!constraints->is_planar());
+        TS_ASSERT_EQUALS(constraints->get_crossing_count(), 1);
+        
+        auto crossing_links = constraints->get_crossing_links();
+        TS_ASSERT_EQUALS(crossing_links.size(), 2); // Both links involved in crossing
+    }
+
+    void test_sequence_optimization()
+    {
+        // Create a sequence that has crossings
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        Handle c = as->add_node(CONCEPT_NODE, "c");
+        Handle d = as->add_node(CONCEPT_NODE, "d");
+        
+        // Start with suboptimal sequence
+        std::vector<Handle> sequence = {a, c, b, d};
+        constraints->set_sequence(sequence);
+        
+        // Add links that would be better with different ordering
+        // Force add both links to create crossings
+        constraints->add_link(a, b); // Will be crossing in a-c-b-d order
+        constraints->remove_link(a, b);
+        constraints->add_link(a, b);
+        
+        constraints->add_link(c, d);
+        constraints->remove_link(c, d);
+        constraints->add_link(c, d);
+        
+        size_t initial_crossings = constraints->get_crossing_count();
+        
+        // Optimize the sequence
+        constraints->optimize_sequence();
+        
+        size_t final_crossings = constraints->get_crossing_count();
+        
+        // Should reduce or maintain crossing count
+        TS_ASSERT(final_crossings <= initial_crossings);
+    }
+
+    void test_append_point()
+    {
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        
+        constraints->append_point(a);
+        constraints->append_point(b);
+        
+        const auto& sequence = constraints->get_sequence();
+        TS_ASSERT_EQUALS(sequence.size(), 2);
+        TS_ASSERT_EQUALS(sequence[0], a);
+        TS_ASSERT_EQUALS(sequence[1], b);
+        
+        TS_ASSERT_EQUALS(constraints->get_position(a), 0);
+        TS_ASSERT_EQUALS(constraints->get_position(b), 1);
+    }
+
+    void test_remove_link()
+    {
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        Handle c = as->add_node(CONCEPT_NODE, "c");
+        
+        std::vector<Handle> sequence = {a, b, c};
+        constraints->set_sequence(sequence);
+        
+        // Add link
+        TS_ASSERT(constraints->add_link(a, c));
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 1);
+        
+        // Remove link
+        constraints->remove_link(a, c);
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 0);
+        
+        // Should be able to add again
+        TS_ASSERT(constraints->add_link(a, c));
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 1);
+    }
+
+    void test_clear()
+    {
+        Handle a = as->add_node(CONCEPT_NODE, "a");
+        Handle b = as->add_node(CONCEPT_NODE, "b");
+        
+        constraints->append_point(a);
+        constraints->append_point(b);
+        constraints->add_link(a, b);
+        
+        TS_ASSERT_EQUALS(constraints->get_sequence().size(), 2);
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 1);
+        
+        constraints->clear();
+        
+        TS_ASSERT_EQUALS(constraints->get_sequence().size(), 0);
+        TS_ASSERT_EQUALS(constraints->get_link_count(), 0);
+        TS_ASSERT_EQUALS(constraints->get_position(a), -1);
+    }
+};
